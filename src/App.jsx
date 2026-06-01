@@ -59,7 +59,7 @@ export default function App() {
   const [erroBusca, setErroBusca] = useState("");
 
   // Assento
-  const [assentoSelecionado, setAssentoSelecionado] = useState(null);
+  const [assentosSelecionados, setAssentosSelecionados] = useState([]);
   const [assentosOcupados, setAssentosOcupados] = useState(new Set());
   const preco = origem && destino && tipoServico ? gerarPreco(origem, destino, tipoServico) : 0;
 
@@ -92,7 +92,7 @@ export default function App() {
   useEffect(() => {
     if (etapa === 3 && origem && destino) {
       setAssentosOcupados(gerarAssentosOcupados(origem, destino));
-      setAssentoSelecionado(null);
+      setAssentosSelecionados([]);
     }
   }, [etapa, origem, destino]);
 
@@ -125,7 +125,7 @@ export default function App() {
 
   const validarCartao = () => {
     if (!nomeCartao.trim()) return "Informe o nome no cartão.";
-    if (numeroCartao.replace(/\s/g, "").length < 16) return "Número de cartão inválido.";
+
     if (!validade.match(/^\d{2}\/\d{2}$/)) return "Validade inválida. Use MM/AA.";
     if (cvv.length < 3) return "CVV inválido.";
     return "";
@@ -140,7 +140,7 @@ export default function App() {
   };
 
   const handleContinuarParaPagamento = () => {
-    if (!assentoSelecionado) return;
+    if (assentosSelecionados.length < passageiros) return;
     setEtapa(4);
   };
 
@@ -372,8 +372,12 @@ export default function App() {
 
             {/* Centro: mapa do ônibus */}
             <div style={S.card}>
-              <h3 style={{ color:"#071d70", textAlign:"center", margin:"0 0 4px" }}>Selecione seu assento</h3>
-              <p style={{ fontSize:13, color:"#64748b", textAlign:"center", marginBottom:20 }}>Clique em um assento disponível.</p>
+              <h3 style={{ color:"#071d70", textAlign:"center", margin:"0 0 4px" }}>
+                Selecione {passageiros === 1 ? "seu assento" : `os ${passageiros} assentos`}
+              </h3>
+              <p style={{ fontSize:13, color:"#64748b", textAlign:"center", marginBottom:20 }}>
+                {assentosSelecionados.length} de {passageiros} assento{passageiros > 1 ? "s" : ""} selecionado{assentosSelecionados.length !== 1 ? "s" : ""}.
+              </p>
 
               {/* Legenda */}
               <div style={{ display:"flex", justifyContent:"center", gap:20, marginBottom:18, fontSize:12 }}>
@@ -394,18 +398,27 @@ export default function App() {
                         {par.map(num => {
                           const n = Number(num);
                           const ocupado = assentosOcupados.has(n);
-                          const selecionado = assentoSelecionado === n;
+                          const selecionado = assentosSelecionados.includes(n);
+                          const cheio = assentosSelecionados.length >= passageiros && !selecionado;
                           return (
                             <button
                               key={num}
-                              disabled={ocupado}
-                              onClick={() => setAssentoSelecionado(n)}
+                              disabled={ocupado || cheio}
+                              onClick={() => {
+                                if (selecionado) {
+                                  setAssentosSelecionados(prev => prev.filter(a => a !== n));
+                                } else {
+                                  setAssentosSelecionados(prev => [...prev, n]);
+                                }
+                              }}
                               style={{
                                 width:46, height:40, borderRadius:7,
                                 border: selecionado ? "2px solid #16a34a" : ocupado ? "1.5px solid #f87171" : "1.5px solid #cbd5e1",
-                                fontWeight:700, fontSize:13, cursor: ocupado ? "not-allowed" : "pointer",
+                                fontWeight:700, fontSize:13,
+                                cursor: ocupado || cheio ? "not-allowed" : "pointer",
                                 backgroundColor: selecionado ? "#86efac" : ocupado ? "#fee2e2" : "white",
                                 color: selecionado ? "#166534" : ocupado ? "#b91c1c" : "#1e293b",
+                                opacity: cheio ? 0.45 : 1,
                                 transition:"all 0.15s"
                               }}
                             >
@@ -420,16 +433,31 @@ export default function App() {
               </div>
             </div>
 
-            {/* Direita: assento selecionado */}
+            {/* Direita: assentos selecionados */}
             <div style={{ ...S.card, backgroundColor:"#ecf2ff", textAlign:"center", display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center" }}>
-              {assentoSelecionado ? (
+              {assentosSelecionados.length > 0 ? (
                 <>
-                  <span style={{ fontSize:13, color:"#071d70", fontWeight:700 }}>Assento selecionado</span>
-                  <div style={{ fontSize:60, fontWeight:800, color:"#071d70", margin:"12px 0" }}>{String(assentoSelecionado).padStart(2,"0")}</div>
-                  <p style={{ fontSize:18, fontWeight:700, color:"#1e293b", margin:0 }}>R$ {preco * passageiros},00</p>
-                  <button onClick={handleContinuarParaPagamento} style={{ ...S.btn, width:"100%", marginTop:24 }}>
-                    Continuar
-                  </button>
+                  <span style={{ fontSize:13, color:"#071d70", fontWeight:700 }}>
+                    {assentosSelecionados.length === 1 ? "Assento selecionado" : "Assentos selecionados"}
+                  </span>
+                  <div style={{ display:"flex", flexWrap:"wrap", justifyContent:"center", gap:8, margin:"14px 0" }}>
+                    {assentosSelecionados.map(a => (
+                      <span key={a} style={{ fontSize:24, fontWeight:800, color:"#071d70", backgroundColor:"white", borderRadius:8, padding:"6px 12px", border:"2px solid #c7d7f8" }}>
+                        {String(a).padStart(2,"0")}
+                      </span>
+                    ))}
+                  </div>
+                  <p style={{ fontSize:16, fontWeight:700, color:"#1e293b", margin:0 }}>R$ {preco * passageiros},00</p>
+                  {assentosSelecionados.length < passageiros && (
+                    <p style={{ fontSize:12, color:"#f59e0b", marginTop:8, fontWeight:600 }}>
+                      Selecione mais {passageiros - assentosSelecionados.length} assento{passageiros - assentosSelecionados.length > 1 ? "s" : ""}
+                    </p>
+                  )}
+                  {assentosSelecionados.length === passageiros && (
+                    <button onClick={handleContinuarParaPagamento} style={{ ...S.btn, width:"100%", marginTop:20 }}>
+                      Continuar
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
@@ -453,7 +481,7 @@ export default function App() {
                   <p style={{ margin:0 }}><b>Origem:</b> {origem}</p>
                   <p style={{ margin:0 }}><b>Destino:</b> {destino}</p>
                   <p style={{ margin:0 }}><b>Data:</b> {formatarData(data)} às {horario}</p>
-                  <p style={{ margin:0 }}><b>Assento:</b> {String(assentoSelecionado).padStart(2,"0")} — {tipoServico}</p>
+                  <p style={{ margin:0 }}><b>Assento{assentosSelecionados.length > 1 ? "s" : ""}:</b> {assentosSelecionados.map(a => String(a).padStart(2,"0")).join(", ")} — {tipoServico}</p>
                   <p style={{ margin:0 }}><b>Passageiros:</b> {passageiros}</p>
                 </div>
               </div>
@@ -635,7 +663,7 @@ export default function App() {
                   <div><b style={{ color:"#64748b" }}>ORIGEM</b><br/>{origem}</div>
                   <div><b style={{ color:"#64748b" }}>DESTINO</b><br/>{destino}</div>
                   <div><b style={{ color:"#64748b" }}>DATA</b><br/>{formatarData(data)} às {horario}</div>
-                  <div><b style={{ color:"#64748b" }}>ASSENTO</b><br/>{String(assentoSelecionado).padStart(2,"0")} — {tipoServico}</div>
+                  <div><b style={{ color:"#64748b" }}>ASSENTO{assentosSelecionados.length > 1 ? "S" : ""}</b><br/>{assentosSelecionados.map(a => String(a).padStart(2,"0")).join(", ")} — {tipoServico}</div>
                   <div><b style={{ color:"#64748b" }}>PASSAGEIRO</b><br/>{nomeUsuario}</div>
                   <div><b style={{ color:"#64748b" }}>VALOR PAGO</b><br/>R$ {preco * passageiros},00</div>
                 </div>
@@ -687,7 +715,7 @@ export default function App() {
                 </div>
               )}
 
-              <button onClick={() => { setEtapa(1); setOrigem(""); setDestino(""); setData(""); setHorario(""); setTipoServico(""); setPassageiros(1); setAssentoSelecionado(null); setNomeUsuario(""); setTelefone(""); setEmail(""); setMetodoPagamento("pix"); setNumeroCartao(""); setNomeCartao(""); setValidade(""); setCvv(""); setQuerNF(null); setCpfNF(""); setSmsEnviado(false); }}
+              <button onClick={() => { setEtapa(1); setOrigem(""); setDestino(""); setData(""); setHorario(""); setTipoServico(""); setPassageiros(1); setAssentosSelecionados([]); setNomeUsuario(""); setTelefone(""); setEmail(""); setMetodoPagamento("pix"); setNumeroCartao(""); setNomeCartao(""); setValidade(""); setCvv(""); setQuerNF(null); setCpfNF(""); setSmsEnviado(false); }}
                 style={{ ...S.btn, margin:"0 auto", paddingLeft:40, paddingRight:40 }}>
                 <Bus size={16}/> Nova busca
               </button>
