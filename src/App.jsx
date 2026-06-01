@@ -1,288 +1,707 @@
-import React, { useState } from 'react';
-import { Search, Calendar, Clock, MapPin, User, Bus, CheckCircle2, CreditCard, QrCode, ArrowLeftRight, ChevronLeft, ShieldCheck, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect } from "react";
+import { Search, QrCode, HelpCircle, CreditCard, Bus, CheckCircle2, Send, RefreshCw, ShieldCheck, AlertCircle, Ticket } from "lucide-react";
 
+// ─── Dados simulados ────────────────────────────────────────────────────────
+const CIDADES = [
+  "São Paulo - SP", "Rio de Janeiro - RJ", "Campinas - SP", "Belo Horizonte - MG",
+  "Curitiba - PR", "Porto Alegre - RS", "Salvador - BA", "Fortaleza - CE",
+  "Recife - PE", "Manaus - AM", "Brasília - DF", "Goiânia - GO",
+];
+
+const HORARIOS = ["05:00", "07:30", "09:00", "11:00", "13:30", "15:00", "17:30", "19:00", "21:00", "23:30"];
+
+const TIPOS_SERVICO = ["Convencional", "Executivo", "Leito", "Semi-leito"];
+
+// Preços base por par de cidades (simulado)
+const gerarPreco = (origem, destino, tipo) => {
+  const hash = (origem.length * 7 + destino.length * 13) % 100;
+  const base = 45 + hash;
+  const mult = { Convencional: 1, Executivo: 1.5, "Semi-leito": 1.8, Leito: 2.2 }[tipo] || 1;
+  return Math.round(base * mult);
+};
+
+// Assentos ocupados (simulados, baseados na rota)
+const gerarAssentosOcupados = (origem, destino) => {
+  const seed = origem.length * 3 + destino.length * 7;
+  const ocupados = new Set();
+  for (let i = 1; i <= 32; i++) {
+    if ((i * seed + i) % 7 === 0) ocupados.add(i);
+  }
+  return ocupados;
+};
+
+const LAYOUT_ESQUERDA = [["01","02"],["05","06"],["09","10"],["13","14"],["17","18"],["21","22"],["25","26"],["29","30"]];
+const LAYOUT_DIREITA  = [["03","04"],["07","08"],["11","12"],["15","16"],["19","20"],["23","24"],["27","28"],["31","32"]];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const formatarData = (iso) => {
+  if (!iso) return "";
+  const [a, m, d] = iso.split("-");
+  return `${d}/${m}/${a}`;
+};
+
+const hoje = () => {
+  const d = new Date();
+  return d.toISOString().split("T")[0];
+};
+
+// ─── Componente principal ────────────────────────────────────────────────────
 export default function App() {
-  // Controle de telas: 1 = Busca, 3 = Assentos, 4 = Pagamento
   const [etapa, setEtapa] = useState(1);
-  const [assentoSelecionado, setAssentoSelecionado] = useState(17);
-  const [metodoPagamento, setMetodoPagamento] = useState('pix');
 
-  // Lista de assentos fictícia para a tela 3 (Simulando o layout do ônibus do print)
-  const assentosEsquerda = [
-    ['01', '02'], ['05', '06'], ['09', '10'], ['13', '14'], 
-    ['17', '18'], ['21', '22'], ['25', '26'], ['29', '30']
-  ];
-  const assentosDireita = [
-    ['03', '04'], ['07', '08'], ['11', '12'], ['15', '16'], 
-    ['19', '20'], ['23', '24'], ['27', '28'], ['31', '32']
-  ];
+  // Busca
+  const [origem, setOrigem] = useState("");
+  const [destino, setDestino] = useState("");
+  const [data, setData] = useState("");
+  const [horario, setHorario] = useState("");
+  const [tipoServico, setTipoServico] = useState("");
+  const [passageiros, setPassageiros] = useState(1);
+  const [erroBusca, setErroBusca] = useState("");
+
+  // Assento
+  const [assentoSelecionado, setAssentoSelecionado] = useState(null);
+  const [assentosOcupados, setAssentosOcupados] = useState(new Set());
+  const preco = origem && destino && tipoServico ? gerarPreco(origem, destino, tipoServico) : 0;
+
+  // Dados do usuário (RF06)
+  const [nomeUsuario, setNomeUsuario] = useState("");
+  const [telefone, setTelefone] = useState("");
+  const [email, setEmail] = useState("");
+  const [erroUsuario, setErroUsuario] = useState("");
+
+  // Pagamento
+  const [metodoPagamento, setMetodoPagamento] = useState("pix");
+  const [numeroCartao, setNumeroCartao] = useState("");
+  const [nomeCartao, setNomeCartao] = useState("");
+  const [validade, setValidade] = useState("");
+  const [cvv, setCvv] = useState("");
+  const [erroCartao, setErroCartao] = useState("");
+  const [processando, setProcessando] = useState(false);
+
+  // Nota fiscal (RF08/RF09)
+  const [querNF, setQuerNF] = useState(null);
+  const [cpfNF, setCpfNF] = useState("");
+
+  // Confirmação (RF10)
+  const [bilheteCodigo] = useState(() => "BP" + Math.random().toString(36).substr(2,8).toUpperCase());
+  const [smsEnviado, setSmsEnviado] = useState(false);
+  const [reenviando, setReenviando] = useState(false);
+  const [reenviadoOk, setReenviadoOk] = useState(false);
+
+  // Quando avança para assentos, gera ocupados
+  useEffect(() => {
+    if (etapa === 3 && origem && destino) {
+      setAssentosOcupados(gerarAssentosOcupados(origem, destino));
+      setAssentoSelecionado(null);
+    }
+  }, [etapa, origem, destino]);
+
+  // Simulação de envio de SMS após confirmação
+  useEffect(() => {
+    if (etapa === 5) {
+      const t = setTimeout(() => setSmsEnviado(true), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [etapa]);
+
+  // ── Validações ──────────────────────────────────────────────────────────────
+  const validarBusca = () => {
+    if (!origem) return "Selecione a cidade de origem.";
+    if (!destino) return "Selecione a cidade de destino.";
+    if (origem === destino) return "Origem e destino não podem ser iguais.";
+    if (!data) return "Selecione a data da viagem.";
+    if (data < hoje()) return "A data da viagem não pode ser no passado.";
+    if (!horario) return "Selecione um horário.";
+    if (!tipoServico) return "Selecione o tipo de serviço.";
+    return "";
+  };
+
+  const validarUsuario = () => {
+    if (!nomeUsuario.trim() || nomeUsuario.trim().length < 3) return "Informe seu nome completo.";
+    if (!telefone.replace(/\D/g, "") || telefone.replace(/\D/g, "").length < 10) return "Informe um telefone válido com DDD.";
+    if (!email.includes("@") || !email.includes(".")) return "Informe um e-mail válido.";
+    return "";
+  };
+
+  const validarCartao = () => {
+    if (!nomeCartao.trim()) return "Informe o nome no cartão.";
+    if (numeroCartao.replace(/\s/g, "").length < 16) return "Número de cartão inválido.";
+    if (!validade.match(/^\d{2}\/\d{2}$/)) return "Validade inválida. Use MM/AA.";
+    if (cvv.length < 3) return "CVV inválido.";
+    return "";
+  };
+
+  // ── Handlers ────────────────────────────────────────────────────────────────
+  const handleBuscar = () => {
+    const err = validarBusca();
+    if (err) { setErroBusca(err); return; }
+    setErroBusca("");
+    setEtapa(3);
+  };
+
+  const handleContinuarParaPagamento = () => {
+    if (!assentoSelecionado) return;
+    setEtapa(4);
+  };
+
+  const handleConfirmarPagamento = async () => {
+    const errU = validarUsuario();
+    if (errU) { setErroUsuario(errU); return; }
+    setErroUsuario("");
+
+    if (metodoPagamento === "cartao") {
+      const errC = validarCartao();
+      if (errC) { setErroCartao(errC); return; }
+    }
+    setErroCartao("");
+    setProcessando(true);
+    await new Promise(r => setTimeout(r, 2000)); // simula gateway
+    setProcessando(false);
+    setEtapa(5);
+  };
+
+  const handleReenviarSMS = async () => {
+    setReenviando(true);
+    await new Promise(r => setTimeout(r, 1500));
+    setReenviando(false);
+    setReenviadoOk(true);
+    setTimeout(() => setReenviadoOk(false), 4000);
+  };
+
+  const formatarCartao = (v) => v.replace(/\D/g,"").slice(0,16).replace(/(.{4})/g,"$1 ").trim();
+  const formatarValidade = (v) => {
+    v = v.replace(/\D/g,"").slice(0,4);
+    if (v.length > 2) v = v.slice(0,2) + "/" + v.slice(2);
+    return v;
+  };
+  const formatarTelefone = (v) => {
+    v = v.replace(/\D/g,"").slice(0,11);
+    if (v.length > 6) return `(${v.slice(0,2)}) ${v.slice(2,7)}-${v.slice(7)}`;
+    if (v.length > 2) return `(${v.slice(0,2)}) ${v.slice(2)}`;
+    return v;
+  };
+
+  // ── Estilos base ─────────────────────────────────────────────────────────────
+  const S = {
+    card: { backgroundColor:"white", borderRadius:14, padding:24, boxShadow:"0 2px 12px rgba(7,29,112,0.07)" },
+    label: { fontSize:11, fontWeight:700, color:"#071d70", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:4, display:"block" },
+    input: { width:"100%", border:"1.5px solid #dde3f0", borderRadius:8, padding:"10px 12px", fontSize:15, outline:"none", boxSizing:"border-box", fontFamily:"inherit", color:"#1e293b" },
+    select: { width:"100%", border:"1.5px solid #dde3f0", borderRadius:8, padding:"10px 12px", fontSize:15, outline:"none", boxSizing:"border-box", fontFamily:"inherit", color:"#1e293b", backgroundColor:"white", cursor:"pointer" },
+    btn: { backgroundColor:"#071d70", color:"white", padding:"14px 28px", borderRadius:9, border:"none", fontSize:15, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 },
+    btnSecundario: { backgroundColor:"white", color:"#64748b", padding:"12px 22px", borderRadius:9, border:"1.5px solid #cbd5e1", fontSize:14, fontWeight:600, cursor:"pointer" },
+    erro: { backgroundColor:"#fef2f2", border:"1px solid #fca5a5", borderRadius:8, padding:"10px 14px", fontSize:13, color:"#b91c1c", display:"flex", alignItems:"center", gap:8, marginTop:10 },
+  };
+
+  // ── Barra de progresso ───────────────────────────────────────────────────────
+  const etapas = ["Busca", "Assentos", "Pagamento", "Confirmação"];
+  const etapaIdx = etapa === 1 ? 0 : etapa === 3 ? 1 : etapa === 4 ? 2 : 3;
 
   return (
-    <div style={{ fontFamily: 'sans-serif', backgroundColor: '#f3f7fa', minHeight: '100vh', color: '#1e293b', margin: 0, padding: 0 }}>
-      
-      {/* HEADER PRINCIPAL */}
-      <header style={{ backgroundColor: '#071d70', color: 'white', padding: '15px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
-          BUSS<span style={{ color: '#10b981' }}>PASS</span>
+    <div style={{ fontFamily:"'Segoe UI', system-ui, sans-serif", backgroundColor:"#f1f5fb", minHeight:"100vh", color:"#1e293b" }}>
+
+      {/* HEADER */}
+      <header style={{ backgroundColor:"#071d70", color:"white", padding:"14px 36px", display:"flex", justifyContent:"space-between", alignItems:"center", boxShadow:"0 2px 10px rgba(7,29,112,0.3)" }}>
+        <h1 style={{ margin:0, fontSize:22, fontWeight:800, letterSpacing:1 }}>
+          BUSS<span style={{ color:"#10b981" }}>PASS</span>
         </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '25px', fontSize: '14px', opacity: 0.9 }}>
-          <span>🕒 04:20</span>
-          <span>Viagem para: São Paulo - SP ▾</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}><HelpCircle size={16}/> Ajuda</span>
+        <div style={{ display:"flex", alignItems:"center", gap:20, fontSize:13, opacity:0.88 }}>
+          <span style={{ display:"flex", alignItems:"center", gap:6 }}><HelpCircle size={15}/> Ajuda</span>
         </div>
       </header>
 
-      {/* BARRA DE PROGRESSO DE ETAPAS */}
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '20px', backgroundColor: 'white', borderBottom: '1px solid #e2e8f0', gap: '30px', fontSize: '14px' }}>
-        <span style={{ fontWeight: etapa === 1 ? 'bold' : 'normal', color: etapa === 1 ? '#071d70' : '#94a3b8' }}>🔵 1. Busca</span>
-        <span style={{ color: '#94a3b8' }}>— 2. Viagem</span>
-        <span style={{ fontWeight: etapa === 3 ? 'bold' : 'normal', color: etapa === 3 ? '#071d70' : '#94a3b8' }}>{etapa >= 3 ? '🔵' : '⚪'} 3. Assentos</span>
-        <span style={{ fontWeight: etapa === 4 ? 'bold' : 'normal', color: etapa === 4 ? '#071d70' : '#94a3b8' }}>{etapa >= 4 ? '🔵' : '⚪'} 4. Pagamento</span>
-        <span style={{ color: '#94a3b8' }}>— 5. Confirmação</span>
+      {/* PROGRESSO */}
+      <div style={{ backgroundColor:"white", borderBottom:"1px solid #e8edf5", padding:"14px 0" }}>
+        <div style={{ display:"flex", justifyContent:"center", gap:0, maxWidth:600, margin:"0 auto" }}>
+          {etapas.map((label, i) => {
+            const ativo = i === etapaIdx;
+            const concluido = i < etapaIdx;
+            return (
+              <div key={label} style={{ display:"flex", alignItems:"center", flex:1 }}>
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flex:1 }}>
+                  <div style={{
+                    width:28, height:28, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center",
+                    backgroundColor: concluido ? "#10b981" : ativo ? "#071d70" : "#e2e8f0",
+                    color: concluido || ativo ? "white" : "#94a3b8",
+                    fontSize:13, fontWeight:700, transition:"all 0.3s"
+                  }}>
+                    {concluido ? "✓" : i + 1}
+                  </div>
+                  <span style={{ fontSize:11, marginTop:4, fontWeight: ativo ? 700 : 400, color: ativo ? "#071d70" : concluido ? "#10b981" : "#94a3b8" }}>
+                    {label}
+                  </span>
+                </div>
+                {i < etapas.length - 1 && (
+                  <div style={{ height:2, flex:1, backgroundColor: concluido ? "#10b981" : "#e2e8f0", marginBottom:16, transition:"background 0.3s" }}/>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* CONTEÚDO PRINCIPAL DAS TELAS */}
-      <main style={{ padding: '30px 40px', maxWidth: '1300px', margin: '0 auto' }}>
-        
-        {/* ================= TELA 1: BUSCA ================= */}
+      <main style={{ padding:"28px 36px", maxWidth:1200, margin:"0 auto" }}>
+
+        {/* ══════════════ TELA 1: BUSCA ══════════════ */}
         {etapa === 1 && (
-          <div>
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
-              
-              {/* Painel de busca esquerdo */}
-              <div style={{ backgroundColor: 'white', padding: '30px', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-                <h2 style={{ color: '#071d70', marginTop: 0, marginBottom: '5px' }}>Buscar viagens</h2>
-                <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '30px' }}>Informe os dados da sua viagem para encontrar as melhores opções.</p>
-                
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '25px' }}>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '12px', borderRadius: '8px' }}>
-                    <label style={{ fontSize: '11px', color: '#071d70', fontWeight: 'bold' }}>📍 Origem</label>
-                    <input type="text" defaultValue="São Paulo - SP" style={{ width: '100%', border: 'none', outline: 'none', fontWeight: '600', marginTop: '4px', fontSize: '15px' }} />
-                  </div>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '12px', borderRadius: '8px' }}>
-                    <label style={{ fontSize: '11px', color: '#071d70', fontWeight: 'bold' }}>📍 Destino</label>
-                    <input type="text" defaultValue="Rio de Janeiro - RJ" style={{ width: '100%', border: 'none', outline: 'none', fontWeight: '600', marginTop: '4px', fontSize: '15px' }} />
-                  </div>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '12px', borderRadius: '8px' }}>
-                    <label style={{ fontSize: '11px', color: '#071d70', fontWeight: 'bold' }}>📅 Data da viagem</label>
-                    <input type="text" defaultValue="25/05/2026" style={{ width: '100%', border: 'none', outline: 'none', fontWeight: '600', marginTop: '4px', fontSize: '15px' }} />
-                  </div>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '12px', borderRadius: '8px' }}>
-                    <label style={{ fontSize: '11px', color: '#071d70', fontWeight: 'bold' }}>🕒 Horário</label>
-                    <select style={{ width: '100%', border: 'none', outline: 'none', fontWeight: '600', marginTop: '4px', fontSize: '15px', backgroundColor: 'transparent' }}>
-                      <option>Qualquer horário</option>
-                    </select>
-                  </div>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '12px', borderRadius: '8px' }}>
-                    <label style={{ fontSize: '11px', color: '#071d70', fontWeight: 'bold' }}>🚌 Tipo de serviço</label>
-                    <select style={{ width: '100%', border: 'none', outline: 'none', fontWeight: '600', marginTop: '4px', fontSize: '15px', backgroundColor: 'transparent' }}>
-                      <option>Todos os tipos</option>
-                    </select>
-                  </div>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '12px', borderRadius: '8px' }}>
-                    <label style={{ fontSize: '11px', color: '#071d70', fontWeight: 'bold' }}>👤 Passageiros</label>
-                    <select style={{ width: '100%', border: 'none', outline: 'none', fontWeight: '600', marginTop: '4px', fontSize: '15px', backgroundColor: 'transparent' }}>
-                      <option>1 Passageiro</option>
-                    </select>
-                  </div>
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:28 }}>
+            <div style={S.card}>
+              <h2 style={{ color:"#071d70", margin:"0 0 4px 0" }}>Buscar viagens</h2>
+              <p style={{ color:"#64748b", fontSize:13, marginBottom:24 }}>Preencha os dados para encontrar as melhores opções.</p>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+
+                {/* Origem */}
+                <div>
+                  <label style={S.label}>📍 Origem</label>
+                  <select style={S.select} value={origem} onChange={e => setOrigem(e.target.value)}>
+                    <option value="">Selecione a cidade</option>
+                    {CIDADES.filter(c => c !== destino).map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
 
-                <button onClick={() => setEtapa(3)} style={{ width: '100%', backgroundColor: '#071d70', color: 'white', padding: '16px', borderRadius: '8px', border: 'none', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
-                  <Search size={18} /> Buscar viagens
-                </button>
+                {/* Destino */}
+                <div>
+                  <label style={S.label}>📍 Destino</label>
+                  <select style={S.select} value={destino} onChange={e => setDestino(e.target.value)}>
+                    <option value="">Selecione a cidade</option>
+                    {CIDADES.filter(c => c !== origem).map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+
+                {/* Data */}
+                <div>
+                  <label style={S.label}>📅 Data da viagem</label>
+                  <input type="date" style={S.input} value={data} min={hoje()} onChange={e => setData(e.target.value)} />
+                </div>
+
+                {/* Horário */}
+                <div>
+                  <label style={S.label}>🕒 Horário</label>
+                  <select style={S.select} value={horario} onChange={e => setHorario(e.target.value)}>
+                    <option value="">Selecione o horário</option>
+                    <optgroup label="Manhã (05h–12h)">
+                      {HORARIOS.filter(h => parseInt(h) < 12).map(h => <option key={h} value={h}>{h}</option>)}
+                    </optgroup>
+                    <optgroup label="Tarde (12h–18h)">
+                      {HORARIOS.filter(h => parseInt(h) >= 12 && parseInt(h) < 18).map(h => <option key={h} value={h}>{h}</option>)}
+                    </optgroup>
+                    <optgroup label="Noite (18h–24h)">
+                      {HORARIOS.filter(h => parseInt(h) >= 18).map(h => <option key={h} value={h}>{h}</option>)}
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* Tipo de serviço */}
+                <div>
+                  <label style={S.label}>🚌 Tipo de serviço</label>
+                  <select style={S.select} value={tipoServico} onChange={e => setTipoServico(e.target.value)}>
+                    <option value="">Selecione o tipo</option>
+                    {TIPOS_SERVICO.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+
+                {/* Passageiros */}
+                <div>
+                  <label style={S.label}>👤 Passageiros</label>
+                  <select style={S.select} value={passageiros} onChange={e => setPassageiros(Number(e.target.value))}>
+                    {[1,2,3,4,5].map(n => <option key={n} value={n}>{n} passageiro{n>1?"s":""}</option>)}
+                  </select>
+                </div>
               </div>
 
-              {/* Lado Direito Informativo */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ backgroundColor: '#f8fafc', padding: '25px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                  <h3 style={{ color: '#071d70', marginTop: 0 }}>Viaje com mais praticidade</h3>
-                  <p style={{ fontSize: '14px', color: '#334155' }}>📱 <b>Bilhete digital:</b> Receba seu bilhete por SMS.</p>
-                  <p style={{ fontSize: '14px', color: '#334155' }}>💳 <b>Pagamento seguro:</b> Pague com PIX, cartão ou aproximação.</p>
-                  <p style={{ fontSize: '14px', color: '#334155' }}>🕒 <b>Mais agilidade:</b> Autoatendimento rápido e sem filas.</p>
+              {erroBusca && (
+                <div style={S.erro}>
+                  <AlertCircle size={15}/> {erroBusca}
                 </div>
-                <div style={{ backgroundColor: '#071d70', color: 'white', padding: '25px', borderRadius: '12px', backgroundImage: 'linear-gradient(135deg, #071d70, #0b2da8)' }}>
-                  <h4 style={{ margin: '0 0 10px 0', fontSize: '16px' }}>Melhores preços para você</h4>
-                  <p style={{ fontSize: '13px', margin: 0, opacity: 0.9 }}>Compare opções de horários, tipos de ônibus e preços rapidamente.</p>
-                </div>
-              </div>
+              )}
 
+              {/* Preview de preço */}
+              {origem && destino && tipoServico && (
+                <div style={{ backgroundColor:"#f0f5ff", border:"1px solid #c7d7f8", borderRadius:8, padding:"12px 16px", marginTop:16, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontSize:13, color:"#071d70" }}>Preço estimado por passageiro ({tipoServico})</span>
+                  <span style={{ fontSize:20, fontWeight:800, color:"#071d70" }}>R$ {preco},00</span>
+                </div>
+              )}
+
+              <button onClick={handleBuscar} style={{ ...S.btn, width:"100%", marginTop:20, fontSize:16 }}>
+                <Search size={17}/> Buscar viagens
+              </button>
+            </div>
+
+            {/* Coluna direita informativa */}
+            <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+              <div style={{ ...S.card, backgroundColor:"#f8fafc" }}>
+                <h3 style={{ color:"#071d70", marginTop:0, fontSize:15 }}>Viaje com mais praticidade</h3>
+                <p style={{ fontSize:13, color:"#334155", margin:"8px 0" }}>📱 <b>Bilhete digital:</b> Receba via SMS após o pagamento.</p>
+                <p style={{ fontSize:13, color:"#334155", margin:"8px 0" }}>💳 <b>Pagamento seguro:</b> PIX, cartão ou NFC.</p>
+                <p style={{ fontSize:13, color:"#334155", margin:"8px 0" }}>🕒 <b>Sem filas:</b> Autoatendimento rápido.</p>
+              </div>
+              <div style={{ ...S.card, background:"linear-gradient(135deg,#071d70,#0b2da8)", color:"white" }}>
+                <h4 style={{ margin:"0 0 8px 0" }}>🔒 Seus dados estão seguros</h4>
+                <p style={{ fontSize:12, margin:0, opacity:0.88 }}>Seguimos o padrão PCI DSS. Nenhum dado sensível de cartão é armazenado.</p>
+              </div>
+              <div style={{ ...S.card, border:"1px solid #bbf7d0", backgroundColor:"#f0fdf4" }}>
+                <p style={{ fontSize:13, color:"#166534", margin:0 }}>⚡ Resultados em até <b>5 segundos</b> com as melhores ofertas destacadas.</p>
+              </div>
             </div>
           </div>
         )}
 
-        {/* ================= TELA 3: ASSENTOS ================= */}
+        {/* ══════════════ TELA 3: ASSENTOS ══════════════ */}
         {etapa === 3 && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: '25px' }}>
-            
-            {/* Lateral Esquerda: Detalhes da Viagem */}
-            <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-              <h3 style={{ color: '#071d70', marginTop: 0, fontSize: '16px' }}>Sua viagem</h3>
-              <p style={{ fontSize: '13px' }}><b>Origem:</b> São Paulo - SP</p>
-              <p style={{ fontSize: '13px' }}><b>Destino:</b> Campinas - SP</p>
-              <p style={{ fontSize: '13px' }}><b>Data:</b> 25 de Maio de 2026</p>
-              <p style={{ fontSize: '13px' }}><b>Empresa:</b> Viação Exemplo</p>
-              <hr style={{ border: 'none', borderTop: '1px solid #e2e8f0', margin: '15px 0' }} />
-              <p style={{ fontSize: '12px', color: '#64748b' }}>Total</p>
-              <h2 style={{ color: '#071d70', margin: 0 }}>R$ 45,00</h2>
-              <button onClick={() => setEtapa(1)} style={{ width: '100%', padding: '12px', background: 'white', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', marginTop: '20px', fontWeight: 'bold', color: '#64748b' }}>
+          <div style={{ display:"grid", gridTemplateColumns:"260px 1fr 220px", gap:22 }}>
+
+            {/* Esquerda: resumo viagem */}
+            <div style={S.card}>
+              <h3 style={{ color:"#071d70", marginTop:0, fontSize:16 }}>Sua viagem</h3>
+              <div style={{ fontSize:13, display:"flex", flexDirection:"column", gap:8 }}>
+                <p style={{ margin:0 }}><b>Origem:</b> {origem}</p>
+                <p style={{ margin:0 }}><b>Destino:</b> {destino}</p>
+                <p style={{ margin:0 }}><b>Data:</b> {formatarData(data)}</p>
+                <p style={{ margin:0 }}><b>Horário:</b> {horario}</p>
+                <p style={{ margin:0 }}><b>Serviço:</b> {tipoServico}</p>
+                <p style={{ margin:0 }}><b>Passageiros:</b> {passageiros}</p>
+              </div>
+              <hr style={{ border:"none", borderTop:"1px solid #e8edf5", margin:"16px 0" }}/>
+              <p style={{ fontSize:12, color:"#64748b", margin:"0 0 4px" }}>Total estimado</p>
+              <h2 style={{ color:"#071d70", margin:0, fontSize:24 }}>R$ {preco * passageiros},00</h2>
+              <button onClick={() => setEtapa(1)} style={{ ...S.btnSecundario, width:"100%", marginTop:18, textAlign:"center" }}>
                 ‹ Voltar
               </button>
             </div>
 
-            {/* Centro: O Desenho do Ônibus */}
-            <div style={{ backgroundColor: 'white', padding: '25px', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-              <h3 style={{ margin: '0 0 5px 0', color: '#071d70', textAlign: 'center' }}>Selecione seus assentos</h3>
-              <p style={{ fontSize: '13px', color: '#64748b', textAlign: 'center', marginBottom: '25px' }}>Clique em um assento disponível para selecioná-lo.</p>
-              
-              <div style={{ backgroundColor: '#ecf0f9', padding: '8px', borderRadius: '6px', textAlign: 'center', fontSize: '13px', color: '#071d70', fontWeight: '5px', marginBottom: '20px' }}>
+            {/* Centro: mapa do ônibus */}
+            <div style={S.card}>
+              <h3 style={{ color:"#071d70", textAlign:"center", margin:"0 0 4px" }}>Selecione seu assento</h3>
+              <p style={{ fontSize:13, color:"#64748b", textAlign:"center", marginBottom:20 }}>Clique em um assento disponível.</p>
+
+              {/* Legenda */}
+              <div style={{ display:"flex", justifyContent:"center", gap:20, marginBottom:18, fontSize:12 }}>
+                <span style={{ display:"flex", alignItems:"center", gap:6 }}><span style={{ width:16,height:16,borderRadius:4,backgroundColor:"white",border:"1.5px solid #cbd5e1",display:"inline-block" }}/> Disponível</span>
+                <span style={{ display:"flex", alignItems:"center", gap:6 }}><span style={{ width:16,height:16,borderRadius:4,backgroundColor:"#86efac",display:"inline-block" }}/> Selecionado</span>
+                <span style={{ display:"flex", alignItems:"center", gap:6 }}><span style={{ width:16,height:16,borderRadius:4,backgroundColor:"#fca5a5",display:"inline-block" }}/> Ocupado</span>
+              </div>
+
+              <div style={{ backgroundColor:"#ecf0f9", padding:"7px 12px", borderRadius:7, textAlign:"center", fontSize:13, color:"#071d70", fontWeight:600, marginBottom:20 }}>
                 🚌 Frente do ônibus
               </div>
 
-              {/* Corredor e Poltronas baseadas no seu mock-up */}
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '40px' }}>
-                {/* Lado Esquerdo do Corredor */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {assentosEsquerda.map((par, idx) => (
-                    <div key={idx} style={{ display: 'flex', gap: '10px' }}>
-                      {par.map(num => (
-                        <button 
-                          key={num} 
-                          onClick={() => setAssentoSelecionado(Number(num))}
-                          style={{
-                            width: '45px', height: '40px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 'bold', cursor: 'pointer',
-                            backgroundColor: assentoSelecionado === Number(num) ? '#86efac' : 'white',
-                            color: assentoSelecionado === Number(num) ? '#166534' : '#1e293b'
-                          }}
-                        >
-                          {num}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Lado Direito do Corredor */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {assentosDireita.map((par, idx) => (
-                    <div key={idx} style={{ display: 'flex', gap: '10px' }}>
-                      {par.map(num => (
-                        <button 
-                          key={num} 
-                          onClick={() => setAssentoSelecionado(Number(num))}
-                          style={{
-                            width: '45px', height: '40px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 'bold', cursor: 'pointer',
-                            backgroundColor: assentoSelecionado === Number(num) ? '#86efac' : 'white',
-                            color: assentoSelecionado === Number(num) ? '#166534' : '#1e293b'
-                          }}
-                        >
-                          {num}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
+              <div style={{ display:"flex", justifyContent:"center", gap:36 }}>
+                {[LAYOUT_ESQUERDA, LAYOUT_DIREITA].map((lado, li) => (
+                  <div key={li} style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {lado.map((par, idx) => (
+                      <div key={idx} style={{ display:"flex", gap:8 }}>
+                        {par.map(num => {
+                          const n = Number(num);
+                          const ocupado = assentosOcupados.has(n);
+                          const selecionado = assentoSelecionado === n;
+                          return (
+                            <button
+                              key={num}
+                              disabled={ocupado}
+                              onClick={() => setAssentoSelecionado(n)}
+                              style={{
+                                width:46, height:40, borderRadius:7,
+                                border: selecionado ? "2px solid #16a34a" : ocupado ? "1.5px solid #f87171" : "1.5px solid #cbd5e1",
+                                fontWeight:700, fontSize:13, cursor: ocupado ? "not-allowed" : "pointer",
+                                backgroundColor: selecionado ? "#86efac" : ocupado ? "#fee2e2" : "white",
+                                color: selecionado ? "#166534" : ocupado ? "#b91c1c" : "#1e293b",
+                                transition:"all 0.15s"
+                              }}
+                            >
+                              {num}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
             </div>
 
-            {/* Lateral Direita: Assento Selecionado */}
-            <div style={{ backgroundColor: '#ecf2ff', padding: '25px', borderRadius: '12px', textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <span style={{ fontSize: '14px', color: '#071d70', fontWeight: 'bold' }}>Assento selecionado</span>
-              <h1 style={{ fontSize: '56px', color: '#071d70', margin: '15px 0' }}>{assentoSelecionado}</h1>
-              <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e293b', margin: 0 }}>R$ 45,00</p>
-              <button onClick={() => setEtapa(4)} style={{ width: '100%', backgroundColor: '#2563eb', color: 'white', padding: '14px', borderRadius: '8px', border: 'none', fontWeight: 'bold', marginTop: '30px', cursor: 'pointer', fontSize: '15px' }}>
-                Continuar
-              </button>
+            {/* Direita: assento selecionado */}
+            <div style={{ ...S.card, backgroundColor:"#ecf2ff", textAlign:"center", display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center" }}>
+              {assentoSelecionado ? (
+                <>
+                  <span style={{ fontSize:13, color:"#071d70", fontWeight:700 }}>Assento selecionado</span>
+                  <div style={{ fontSize:60, fontWeight:800, color:"#071d70", margin:"12px 0" }}>{String(assentoSelecionado).padStart(2,"0")}</div>
+                  <p style={{ fontSize:18, fontWeight:700, color:"#1e293b", margin:0 }}>R$ {preco * passageiros},00</p>
+                  <button onClick={handleContinuarParaPagamento} style={{ ...S.btn, width:"100%", marginTop:24 }}>
+                    Continuar
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize:38 }}>🪑</div>
+                  <p style={{ fontSize:13, color:"#64748b", marginTop:10 }}>Nenhum assento selecionado</p>
+                </>
+              )}
             </div>
-
           </div>
         )}
 
-        {/* ================= TELA 4: PAGAMENTO ================= */}
+        {/* ══════════════ TELA 4: PAGAMENTO ══════════════ */}
         {etapa === 4 && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '30px' }}>
-            
-            {/* Coluna Esquerda: Resumos */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px' }}>
-                <h4 style={{ color: '#071d70', margin: '0 0 15px 0' }}>Resumo da viagem</h4>
-                <p style={{ fontSize: '13px' }}><b>Origem:</b> Rio de Janeiro - RJ</p>
-                <p style={{ fontSize: '13px' }}><b>Destino:</b> São Paulo - SP</p>
-                <p style={{ fontSize: '13px' }}><b>Data:</b> 25/05/2026</p>
-                <p style={{ fontSize: '13px' }}><b>Assento:</b> Poltrona {assentoSelecionado}</p>
+          <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", gap:28 }}>
+
+            {/* Esquerda: resumo */}
+            <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+              <div style={S.card}>
+                <h4 style={{ color:"#071d70", margin:"0 0 12px" }}>Resumo da viagem</h4>
+                <div style={{ fontSize:13, display:"flex", flexDirection:"column", gap:6 }}>
+                  <p style={{ margin:0 }}><b>Origem:</b> {origem}</p>
+                  <p style={{ margin:0 }}><b>Destino:</b> {destino}</p>
+                  <p style={{ margin:0 }}><b>Data:</b> {formatarData(data)} às {horario}</p>
+                  <p style={{ margin:0 }}><b>Assento:</b> {String(assentoSelecionado).padStart(2,"0")} — {tipoServico}</p>
+                  <p style={{ margin:0 }}><b>Passageiros:</b> {passageiros}</p>
+                </div>
               </div>
-              <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '12px' }}>
-                <h4 style={{ color: '#071d70', margin: '0 0 15px 0' }}>Detalhes do pagamento</h4>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
-                  <span>Valor da passagem</span> <span>R$ 60,00</span>
+              <div style={S.card}>
+                <h4 style={{ color:"#071d70", margin:"0 0 12px" }}>Detalhes do pagamento</h4>
+                <div style={{ fontSize:13, display:"flex", flexDirection:"column", gap:6 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between" }}><span>Passagem ({passageiros}x)</span><span>R$ {preco * passageiros},00</span></div>
+                  <div style={{ display:"flex", justifyContent:"space-between" }}><span>Taxa de serviço</span><span style={{ color:"#10b981" }}>Grátis</span></div>
+                  <hr style={{ border:"none", borderTop:"1px solid #e8edf5", margin:"8px 0" }}/>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontWeight:800, fontSize:16, color:"#071d70" }}>
+                    <span>Total</span><span>R$ {preco * passageiros},00</span>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '15px' }}>
-                  <span>Taxa de serviço</span> <span>R$ 0,00</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#10b981', fontSize: '16px' }}>
-                  <span>Total a pagar</span> <span>R$ 60,00</span>
+              </div>
+              <div style={{ ...S.card, backgroundColor:"#f0fdf4", border:"1px solid #bbf7d0" }}>
+                <div style={{ display:"flex", gap:8, alignItems:"flex-start" }}>
+                  <ShieldCheck size={16} color="#16a34a" style={{ flexShrink:0, marginTop:1 }}/>
+                  <p style={{ fontSize:12, color:"#166534", margin:0 }}>
+                    <b>Seus dados estão seguros.</b> Não armazenamos dados de cartão. Padrão PCI DSS.
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* Coluna Direita: Métodos e Formas */}
-            <div style={{ backgroundColor: 'white', padding: '30px', borderRadius: '12px' }}>
-              <h2 style={{ color: '#071d70', margin: 0 }}>Pagamento</h2>
-              <p style={{ color: '#64748b', fontSize: '14px', marginTop: '5px', marginBottom: '25px' }}>Escolha a forma de pagamento</p>
+            {/* Direita: formulário */}
+            <div style={S.card}>
+              <h2 style={{ color:"#071d70", margin:"0 0 4px" }}>Pagamento</h2>
+              <p style={{ color:"#64748b", fontSize:13, marginBottom:24 }}>Preencha seus dados e escolha a forma de pagamento.</p>
 
-              {/* Botão Pix */}
-              <div 
-                onClick={() => setMetodoPagamento('pix')}
-                style={{ border: metodoPagamento === 'pix' ? '2px solid #2563eb' : '1px solid #cbd5e1', padding: '15px', borderRadius: '8px', marginBottom: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '15px', backgroundColor: metodoPagamento === 'pix' ? '#f0f5ff' : 'white' }}
-              >
-                <input type="radio" checked={metodoPagamento === 'pix'} readOnly />
-                <div>
-                  <b style={{ color: '#071d70' }}>PIX</b>
-                  <div style={{ fontSize: '12px', color: '#64748b' }}>Pagamento instantâneo</div>
-                </div>
-              </div>
-
-              {/* Botão Cartão */}
-              <div 
-                onClick={() => setMetodoPagamento('cartao')}
-                style={{ border: metodoPagamento === 'cartao' ? '2px solid #2563eb' : '1px solid #cbd5e1', padding: '15px', borderRadius: '8px', marginBottom: '25px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '15px', backgroundColor: metodoPagamento === 'cartao' ? '#f0f5ff' : 'white' }}
-              >
-                <input type="radio" checked={metodoPagamento === 'cartao'} readOnly />
-                <div>
-                  <b style={{ color: '#071d70' }}>Cartão de crédito</b>
-                  <div style={{ fontSize: '12px', color: '#64748b' }}>Pague em até 12x</div>
-                </div>
-              </div>
-
-              {/* Área Condicional do QR Code Pix */}
-              {metodoPagamento === 'pix' && (
-                <div style={{ border: '1px solid #e2e8f0', padding: '25px', borderRadius: '8px', display: 'flex', gap: '25px', alignItems: 'center', backgroundColor: '#fdfdfd' }}>
-                  <div style={{ border: '1px solid #cbd5e1', padding: '10px', borderRadius: '8px', backgroundColor: 'white' }}>
-                    <QrCode size={120} color="#071d70" />
+              {/* RF06: Dados do usuário */}
+              <div style={{ backgroundColor:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:10, padding:18, marginBottom:24 }}>
+                <h4 style={{ color:"#071d70", margin:"0 0 14px", fontSize:14 }}>Dados do passageiro</h4>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+                  <div style={{ gridColumn:"1/-1" }}>
+                    <label style={S.label}>Nome completo</label>
+                    <input style={S.input} placeholder="Seu nome completo" value={nomeUsuario} onChange={e => setNomeUsuario(e.target.value)} />
                   </div>
-                  <div style={{ fontSize: '14px' }}>
-                    <p style={{ margin: '0 0 5px 0' }}>1. Abra o app do seu banco</p>
-                    <p style={{ margin: '0 0 5px 0' }}>2. Escolha a opção PIX</p>
-                    <p style={{ margin: '0 0 15px 0' }}>3. Escaneie o QR Code ao lado</p>
-                    <span style={{ fontSize: '12px', color: '#64748b' }}>🕒 O pagamento expira em 15:00 minutos</span>
+                  <div>
+                    <label style={S.label}>Telefone (WhatsApp/SMS)</label>
+                    <input style={S.input} placeholder="(11) 99999-9999" value={telefone}
+                      onChange={e => setTelefone(formatarTelefone(e.target.value))} />
+                  </div>
+                  <div>
+                    <label style={S.label}>E-mail</label>
+                    <input style={S.input} type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} />
+                  </div>
+                </div>
+                {erroUsuario && <div style={S.erro}><AlertCircle size={14}/> {erroUsuario}</div>}
+              </div>
+
+              {/* Método de pagamento */}
+              <div style={{ display:"flex", gap:12, marginBottom:20 }}>
+                {[
+                  { id:"pix", label:"PIX", desc:"Instantâneo", icon:"⚡" },
+                  { id:"cartao", label:"Cartão de crédito", desc:"Até 12x", icon:"💳" },
+                ].map(m => (
+                  <div key={m.id} onClick={() => setMetodoPagamento(m.id)}
+                    style={{ flex:1, border: metodoPagamento === m.id ? "2px solid #2563eb" : "1.5px solid #cbd5e1",
+                      borderRadius:10, padding:14, cursor:"pointer",
+                      backgroundColor: metodoPagamento === m.id ? "#f0f5ff" : "white",
+                      transition:"all 0.2s" }}>
+                    <div style={{ fontWeight:700, color:"#071d70", fontSize:14 }}>{m.icon} {m.label}</div>
+                    <div style={{ fontSize:12, color:"#64748b" }}>{m.desc}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* PIX */}
+              {metodoPagamento === "pix" && (
+                <div style={{ border:"1px solid #e2e8f0", borderRadius:10, padding:22, display:"flex", gap:22, alignItems:"center", backgroundColor:"#fdfdfd", marginBottom:20 }}>
+                  <div style={{ border:"1px solid #cbd5e1", padding:10, borderRadius:8, backgroundColor:"white", flexShrink:0 }}>
+                    <QrCode size={110} color="#071d70"/>
+                  </div>
+                  <div style={{ fontSize:13 }}>
+                    <p style={{ margin:"0 0 6px", fontWeight:700, color:"#071d70" }}>Como pagar com PIX:</p>
+                    <p style={{ margin:"0 0 5px" }}>1. Abra o app do seu banco</p>
+                    <p style={{ margin:"0 0 5px" }}>2. Escolha a opção PIX</p>
+                    <p style={{ margin:"0 0 14px" }}>3. Escaneie o QR Code ao lado</p>
+                    <span style={{ fontSize:12, color:"#64748b", backgroundColor:"#fef3c7", padding:"4px 10px", borderRadius:20 }}>⏱ Expira em 15:00 min</span>
                   </div>
                 </div>
               )}
 
-              {/* Rodapé de Ações */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px' }}>
-                <button onClick={() => setEtapa(3)} style={{ padding: '12px 25px', background: 'white', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-                  ‹ Voltar
-                </button>
-                <button onClick={() => alert('Parabéns! Passagem comprada com sucesso. Boa viagem! 🚌')} style={{ backgroundColor: '#071d70', color: 'white', padding: '12px 35px', borderRadius: '8px', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>
-                  Confirmar pagamento 🔒
-                </button>
+              {/* Cartão */}
+              {metodoPagamento === "cartao" && (
+                <div style={{ border:"1px solid #e2e8f0", borderRadius:10, padding:20, marginBottom:20, backgroundColor:"#fdfdfd" }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <label style={S.label}>Número do cartão</label>
+                      <input style={S.input} placeholder="0000 0000 0000 0000" value={numeroCartao}
+                        onChange={e => setNumeroCartao(formatarCartao(e.target.value))} />
+                    </div>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <label style={S.label}>Nome no cartão</label>
+                      <input style={S.input} placeholder="Como aparece no cartão" value={nomeCartao}
+                        onChange={e => setNomeCartao(e.target.value.replace(/[^a-zA-ZÀ-ú\s]/g, ""))} />
+                    </div>
+                    <div>
+                      <label style={S.label}>Validade</label>
+                      <input style={S.input} placeholder="MM/AA" value={validade}
+                        onChange={e => setValidade(formatarValidade(e.target.value))} />
+                    </div>
+                    <div>
+                      <label style={S.label}>CVV</label>
+                      <input style={S.input} placeholder="000" maxLength={4} value={cvv}
+                        onChange={e => setCvv(e.target.value.replace(/\D/g,""))} />
+                    </div>
+                    <div style={{ gridColumn:"1/-1" }}>
+                      <label style={S.label}>Parcelamento</label>
+                      <select style={S.select}>
+                        {Array.from({length:12},(_,i)=>i+1).map(n => (
+                          <option key={n} value={n}>
+                            {n}x de R$ {(preco * passageiros / n).toFixed(2).replace(".",",")} {n === 1 ? "(sem juros)" : n <= 3 ? "(sem juros)" : "(com juros)"}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {erroCartao && <div style={S.erro}><AlertCircle size={14}/> {erroCartao}</div>}
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:14, backgroundColor:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"9px 12px" }}>
+                    <ShieldCheck size={14} color="#16a34a"/>
+                    <p style={{ fontSize:12, color:"#166534", margin:0 }}>Dados do cartão não são armazenados. Transação criptografada via HTTPS.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* RF08: Nota fiscal */}
+              <div style={{ border:"1px solid #e2e8f0", borderRadius:10, padding:18, marginBottom:20, backgroundColor:"#f8fafc" }}>
+                <p style={{ fontSize:14, fontWeight:600, color:"#071d70", margin:"0 0 12px" }}>Deseja receber nota fiscal?</p>
+                <div style={{ display:"flex", gap:12 }}>
+                  <button onClick={() => setQuerNF(true)}
+                    style={{ flex:1, padding:"10px", borderRadius:8, border: querNF === true ? "2px solid #2563eb" : "1.5px solid #cbd5e1",
+                      backgroundColor: querNF === true ? "#f0f5ff" : "white", cursor:"pointer", fontWeight:600, color:"#071d70" }}>
+                    ✅ Sim
+                  </button>
+                  <button onClick={() => { setQuerNF(false); setCpfNF(""); }}
+                    style={{ flex:1, padding:"10px", borderRadius:8, border: querNF === false ? "2px solid #64748b" : "1.5px solid #cbd5e1",
+                      backgroundColor: querNF === false ? "#f8fafc" : "white", cursor:"pointer", fontWeight:600, color:"#64748b" }}>
+                    ❌ Não
+                  </button>
+                </div>
+                {querNF === true && (
+                  <div style={{ marginTop:12 }}>
+                    <label style={S.label}>CPF / CNPJ</label>
+                    <input style={S.input} placeholder="Informe o CPF ou CNPJ" value={cpfNF}
+                      onChange={e => setCpfNF(e.target.value.replace(/[^\d./-]/g,""))} />
+                    <p style={{ fontSize:11, color:"#64748b", margin:"6px 0 0" }}>A nota será enviada para {email || "o e-mail informado acima"}.</p>
+                  </div>
+                )}
               </div>
 
+              {/* Ações */}
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:16 }}>
+                <button onClick={() => setEtapa(3)} style={S.btnSecundario}>‹ Voltar</button>
+                <button onClick={handleConfirmarPagamento} disabled={processando}
+                  style={{ ...S.btn, flex:1, opacity: processando ? 0.8 : 1 }}>
+                  {processando ? <><span>⏳</span> Processando...</> : <><span>🔒</span> Confirmar pagamento — R$ {preco * passageiros},00</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════ TELA 5: CONFIRMAÇÃO ══════════════ */}
+        {etapa === 5 && (
+          <div style={{ maxWidth:680, margin:"0 auto" }}>
+            <div style={{ ...S.card, textAlign:"center", padding:40 }}>
+              <div style={{ fontSize:56, marginBottom:10 }}>🎉</div>
+              <h2 style={{ color:"#16a34a", margin:"0 0 8px" }}>Passagem confirmada!</h2>
+              <p style={{ color:"#64748b", marginBottom:28 }}>Boa viagem, {nomeUsuario.split(" ")[0] || "passageiro"}!</p>
+
+              {/* Bilhete */}
+              <div style={{ border:"2px dashed #cbd5e1", borderRadius:12, padding:"20px 28px", backgroundColor:"#f8fafc", marginBottom:24, textAlign:"left" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                  <h3 style={{ margin:0, color:"#071d70" }}>BUSS<span style={{ color:"#10b981" }}>PASS</span></h3>
+                  <span style={{ backgroundColor:"#dcfce7", color:"#166534", fontSize:12, fontWeight:700, padding:"4px 12px", borderRadius:20 }}>✓ CONFIRMADO</span>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, fontSize:13 }}>
+                  <div><b style={{ color:"#64748b" }}>ORIGEM</b><br/>{origem}</div>
+                  <div><b style={{ color:"#64748b" }}>DESTINO</b><br/>{destino}</div>
+                  <div><b style={{ color:"#64748b" }}>DATA</b><br/>{formatarData(data)} às {horario}</div>
+                  <div><b style={{ color:"#64748b" }}>ASSENTO</b><br/>{String(assentoSelecionado).padStart(2,"0")} — {tipoServico}</div>
+                  <div><b style={{ color:"#64748b" }}>PASSAGEIRO</b><br/>{nomeUsuario}</div>
+                  <div><b style={{ color:"#64748b" }}>VALOR PAGO</b><br/>R$ {preco * passageiros},00</div>
+                </div>
+                <hr style={{ border:"none", borderTop:"1px dashed #cbd5e1", margin:"16px 0" }}/>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div>
+                    <b style={{ color:"#64748b", fontSize:11 }}>CÓDIGO DO BILHETE</b>
+                    <div style={{ fontFamily:"monospace", fontSize:22, fontWeight:800, color:"#071d70", letterSpacing:3 }}>{bilheteCodigo}</div>
+                  </div>
+                  <Ticket size={36} color="#071d70" opacity={0.2}/>
+                </div>
+              </div>
+
+              {/* SMS */}
+              <div style={{ border:"1px solid #e2e8f0", borderRadius:10, padding:16, marginBottom:16, backgroundColor:"#f8fafc" }}>
+                {smsEnviado ? (
+                  <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center", color:"#16a34a" }}>
+                    <CheckCircle2 size={18}/>
+                    <span style={{ fontWeight:600, fontSize:14 }}>Bilhete enviado por SMS para {telefone}</span>
+                  </div>
+                ) : (
+                  <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center", color:"#64748b" }}>
+                    <span style={{ fontSize:14 }}>⏳ Enviando bilhete por SMS...</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Reenvio */}
+              {smsEnviado && (
+                <div style={{ marginBottom:20 }}>
+                  <p style={{ fontSize:13, color:"#64748b", margin:"0 0 10px" }}>Não recebeu o SMS?</p>
+                  <button onClick={handleReenviarSMS} disabled={reenviando}
+                    style={{ ...S.btnSecundario, display:"inline-flex", alignItems:"center", gap:8, margin:"0 auto" }}>
+                    <RefreshCw size={14} style={{ animation: reenviando ? "spin 1s linear infinite" : "none" }}/>
+                    {reenviando ? "Reenviando..." : "Reenviar bilhete"}
+                  </button>
+                  {reenviadoOk && (
+                    <p style={{ fontSize:13, color:"#16a34a", marginTop:8, fontWeight:600 }}>✓ SMS reenviado com sucesso!</p>
+                  )}
+                </div>
+              )}
+
+              {/* Nota fiscal */}
+              {querNF === true && (
+                <div style={{ backgroundColor:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:10, padding:14, marginBottom:20 }}>
+                  <p style={{ fontSize:13, color:"#166534", margin:0 }}>
+                    <b>✅ Nota fiscal será enviada para {email}</b> em até 24 horas úteis.
+                  </p>
+                </div>
+              )}
+
+              <button onClick={() => { setEtapa(1); setOrigem(""); setDestino(""); setData(""); setHorario(""); setTipoServico(""); setPassageiros(1); setAssentoSelecionado(null); setNomeUsuario(""); setTelefone(""); setEmail(""); setMetodoPagamento("pix"); setNumeroCartao(""); setNomeCartao(""); setValidade(""); setCvv(""); setQuerNF(null); setCpfNF(""); setSmsEnviado(false); }}
+                style={{ ...S.btn, margin:"0 auto", paddingLeft:40, paddingRight:40 }}>
+                <Bus size={16}/> Nova busca
+              </button>
             </div>
           </div>
         )}
 
       </main>
+
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; }
+        button:hover { filter: brightness(0.96); }
+      `}</style>
     </div>
   );
 }
