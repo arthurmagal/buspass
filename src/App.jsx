@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Search, QrCode, HelpCircle, CreditCard, Bus, CheckCircle2, Send, RefreshCw, ShieldCheck, AlertCircle, Ticket } from "lucide-react";
 
-// ─── Dados simulados ────────────────────────────────────────────────────────
+// ─── Dados simulados ─────────────────────
 const CIDADES = [
   "São Paulo - SP", "Rio de Janeiro - RJ", "Campinas - SP", "Belo Horizonte - MG",
   "Curitiba - PR", "Porto Alegre - RS", "Salvador - BA", "Fortaleza - CE",
